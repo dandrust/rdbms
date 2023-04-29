@@ -1,0 +1,93 @@
+# 4/15/2023
+## Enumerate all the things
+Revisited this project. Noticed that scan, selection, and nested loop joins (the iterator/executor nodes) had the same interface as ruby enumerators. Read about enumerators and converted each into classes that inherit from enumerator. From there, I was able to implement a very simple query:
+
+```ruby
+# select * from ratings join movies on movies.movieId = ratings.movieId
+movies = Relation.from_csv('movies.csv', headers: true)
+ratings = Relation.from_csv('ratings_abbreviated.csv', headers: true)
+
+movie_scanner = Scan.new(movies.data)
+ratings_scanner = Scan.new(ratings.data)
+
+joiner = Join.new(ratings_scanner, movie_scanner) do |rating, movie|
+  rating[:movieId] == movie[:movieId]
+end
+```
+
+## Sorting
+Looking at the Bradfield DB syllabus, it recommends out-of-core sorting and hashing. The first half of this [Berkely lecture](https://archive.org/details/ucberkeley_webcast_FGvKL2cmZEo) covers sorting. I wanted to try implementing the naive sorting algorithm which would sort a large file a block at a time, committing the sorted results to disk. Then incrementally zip sorted files together until arriving at one single sorted file on disk.  
+
+Exactly how this fits into implementing `order by` I'm not quite sure yet. But I figured getting my hands dirty might bring up some interesting questions and ideas.  I'm focusing my attention on the `ratings.csv` file because it's gigantic and neither my editor nor ruby wants to load it into memory, understandably.
+
+### Binary encoded file format
+Reading the CSV in predictable size chunks was difficult because of varying-length strings, even without string data types. So I spent my effort implementing a binary encoded file rather than fiddling with how to stictch 4k chunks of CSV strings together. See `ratings_convert_csv_to_db.rb`. Pack/unpack was easy - this being my third rodeo.
+
+### Sorting runs an optimal file size
+It's 2:30am. I tried the naive implementation and ended up nearly bricking the computer because I wasn writing thousands of 4096 byte files. The better implementation where you use more RAM and build fewer, bigger files was way more practical. Finally, I have ~280 files on disk at around 1MB that are sorted!
+
+### Merging, and using the Relation abstraction
+I chose to merge 20 of the "pass 0" artifacts to test the implementation. I write an implementation for the `Relation` class to read a `.db` file. That let me focus on just streaming the data I need at hand vs thinking about page sizes and pulling in pages at a time and draining/replacing those behind an `iterator.next` interface.
+
+I'm not sure that I want to follow this further without perhaps writing some test cases to show that things are being ordered correctly. A quick spot check of the first 100 records of the sorted output looked good! Though, the process ended with a `StopIteration` exception having been raised, so it'd also be nice to fix up the `Relation` classes to handle that a bit more gracefully.
+
+* Improve `Relation`/iterator EOF handling
+* Add headers to the file format (data types too?)
+* Write tests around sorting
+* Ability to express field name (or field position?) to be sorted by
+* Improve the merge algorithm to maybe keep the relations/values sorted, and then do an ordered insert when a new value is pulled
+
+## Relations
+At this point, I'm not playing with sorting anymore. I'd like to, but I want to strengthen the relation model so that it's an abstraction I can reach for when doing it.  Go slow to go fast, I hope.
+
+### Revamping the file format
+I've added a header so that the caller doesn't need to know any information about schema. Additionally, I've made the record layout much more condensed and variable length, so callers won't be about to read, eg. 16 bytes at a time all the time
+
+### Inserts
+I've added a first implementation of inserting records and I've looped over the movies csv to populate `movies.db`
+
+### Left to do
+Lots!
+* Increment record size in header
+* Figure out how to represent null values in the record
+* Organize records within a file so that the file can be broken into 4k pages
+- Update my enumerator implementations so that they can read the variable-length record layout (done!)
+
+From there, especially after I have the 4k page business worked out, I'd like to get back to sorting. The idea is that I'll be able to easily fetch page after page and sort it. Sorting the movies table -- or rather, something I can comfortably fit into memory -- will make generalizing the algorithm a bit simplier.
+
+I may also try to port this to Rust or something so that I can work with memory more directly. Some of the page size stuff may be more relevant (or even easier to reason about) if I'm not fighting the VM's interface.
+
+## Something to try next?
+After talking with ChatGPT about how to capture null fields - implement a null bitmap
+
+Try not to design the perfect thing. Let the implementation evolve as you implement new features!
+
+Problem at hand: representing nil values
+Intuition:
+* Need some tuple/row level metadata where I can store a null bitmap
+* Null byte array needs to only apply to fields that are nullable
+  * If a table doesn't' contain any nullable fields, perhaps it's tuples don't need a null bitmap
+
+Approach:
+* Just add this to your existing implementation
+* Existing implementation reserves space for a data types because nulls aren't present. Change this so that no memory is wasted by null values
+* Eliminating reserved space for null values will mean that records will be variable length even if it doesn't contain a string.  It might be convenient to encode the length of the tuple in the header
+  * On the other hand, tuples can be arbitrarily large. Is it fair for a table scan to simply have to read each value?
+  * Instead of length, perhaps offset of next tuple would work better?
+* In the spirit of the first line of this doc, perhaps don't change anything unless you NEED to. Your current implementation reads through each field to arrive at the next tuple -- just keep it that way! You can read the null bit array first to know if you need to read to get a value, or if you should just return the null value.
+
+Ideas:
+* Try writing the tuple to disk in rust. Given an array/collection of key/value structs (some of them null!), encode and write the result to a file
+  * Get a feel for what this would be like in Rust. Easier? Harder? Rust stands out because I can play with memory management AND I can have conveniences like iterator interfaces, etc.
+
+## A way forward in Ruby?
+* Pull off in-core sorting with large out-of-core data
+* Goal: Still use Ruby, and interrogate it's implementation along the way
+  * https://stackoverflow.com/questions/6701103/understanding-ruby-and-os-i-o-buffering
+* The whole reason I went on the path of binary encoding is that I wanted to be able to easily grab data to sort without having to worry about that data spilling over a boundary (ie, 4096 bytes)
+
+I've come back to this after a week or so away. I'd gotten a little bogged down with wanting to know everything before doing anything.  After taking stock, I'd really like to use the Berkely lectures as a guide so I'll stick to that content.  I went on the side quest with making a binary-encoded format so that I could reliably grab a chunk of data without worrying that I'd grab half a record at the end of the chunk. In doing that, I realized that fixed-size records worked great when there were integers, floats, and timestamps involved. But strings were a bit trickier!  So I expanded my file format but in doing so I wasn't careful about boundaries, so I was back at square one where if I grab a predetermined chunk of data I might have a tuple that spans the boudnary.
+
+So today I revisited the way that I'm inserting tuples so that I don't write a record across a 4096 byte boundary (0x1000). However, that breaks code that reads back the records! 
+
+For next time: How will I have the code reading a file know that it's reached the last tuple on a 4kb block? As long as the first long it reads is zero, will that be enough to signal that it's time to grab a new block?

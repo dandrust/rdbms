@@ -1,0 +1,259 @@
+I'm trying to define a binary file format for a series of tuples or records.  Like, a file format that could efficiently store relational data.  My current implementation reserves a specific amount of space for a field of a given data type.  For example, if the field is a 32-bit unsigned integer, 4 bytes are reserved to store the value.  However, I'm having a hard time understanding how to store NULL values.  How could I change my file format spec to account for NULL values?
+One approach to store NULL values in a binary file format for tuples or records is to use a bit flag to indicate whether a field contains a value or is NULL. This technique is commonly known as a "null bitmap."
+
+The null bitmap is a sequence of bits, where each bit corresponds to a field in the tuple or record. If the bit is set to 1, it means the corresponding field is NULL; otherwise, the field has a value. For example, if you have a tuple with three fields, the null bitmap could be represented as a byte with the following binary sequence: 00000101, where the first, third, and fourth fields are NULL, and the second field has a value.
+
+To use a null bitmap in your file format, you could reserve one byte for every 8 fields in your tuples or records. If a tuple or record has fewer than 8 fields, you can still reserve one byte for the null bitmap, but some bits will be unused.
+
+When reading or writing data, you can use the null bitmap to determine whether a field has a value or is NULL. If the corresponding bit in the null bitmap is 1, you can skip the field's reserved space because it doesn't contain a value. Otherwise, you can read or write the field's reserved space to access its value.
+
+Keep in mind that using a null bitmap will increase the size of your binary file format, as you need to reserve additional space to store the bitmap. However, this approach is widely used and accepted because it allows you to efficiently store and retrieve NULL values in a binary file format.
+
+
+
+
+Dan Drust
+How does postgres implement this?
+PostgreSQL, an open-source relational database management system, also uses a null bitmap to efficiently store NULL values in its binary file format. When PostgreSQL writes a tuple to disk, it stores a header that contains the tuple's length, a null bitmap indicating which attributes are NULL, and other metadata.
+
+The null bitmap is stored as a sequence of bits in the header, with each bit corresponding to an attribute in the tuple. If a bit is set to 1, it indicates that the corresponding attribute is NULL; otherwise, the attribute has a value. PostgreSQL uses a variable-length encoding for the null bitmap, so the actual length of the bitmap depends on the number of attributes in the tuple and the number of NULL attributes.
+
+When reading a tuple from disk, PostgreSQL first reads the header to determine the tuple's length and the position of the null bitmap. It then reads the null bitmap and uses it to determine which attributes are NULL and which have values. If an attribute is NULL, PostgreSQL skips over its data in the file, as it is not needed. If the attribute has a value, PostgreSQL reads the data from the file and assigns it to the corresponding field in the tuple.
+
+This approach allows PostgreSQL to efficiently store and retrieve NULL values in its binary file format, while also minimizing the amount of disk space needed to store tuples.
+
+
+
+
+Dan Drust
+That's interesting. So am I understanding correctly that postgres includes a header per tuple stored on disk?
+Yes, that's correct. PostgreSQL stores a header per tuple in its binary file format, which contains various metadata about the tuple, including the tuple's length, a null bitmap indicating which attributes are NULL, and other information such as transaction ID and visibility information.
+
+The header is typically stored at the beginning of the tuple's data on disk and has a fixed size, which is small relative to the size of the tuple's data. The header allows PostgreSQL to efficiently locate and retrieve tuples from disk, as it can quickly determine the length of the tuple and the positions of the null bitmap and other metadata.
+
+In addition to the header, PostgreSQL also stores multiple tuples in a single disk page, which is a fixed-size block of disk space that can contain multiple tuples. The page header contains information about the page, including the location of the tuples within the page and a bitmap indicating which tuples are in use and which are free.
+
+By storing multiple tuples on a single page and using a header per tuple, PostgreSQL can efficiently store and retrieve large amounts of data on disk while minimizing the overhead associated with storing metadata.
+
+
+
+
+Dan Drust
+Can you tell me which source file implements the tuple header so that I can read the implementation?
+Certainly! In PostgreSQL, the source file that implements the tuple header is src/include/storage/tupdesc.h.
+
+In this file, you can find the definition of the HeapTupleHeaderData struct, which represents the header of a tuple. The struct contains various fields, including the tuple length, the number of attributes in the tuple, a null bitmap indicating which attributes are NULL, and other metadata.
+
+You can also find functions in this file that are used to manipulate tuple headers, such as HeapTupleHeaderGetNatts (which returns the number of attributes in the tuple), HeapTupleHeaderGetTypMod (which returns the type modifier of a particular attribute), and HeapTupleHeaderGetDatumLength (which returns the length of a particular attribute's data).
+
+Additionally, you may want to look at the src/include/access/tupdesc.h file, which defines the TupleDesc struct that describes the structure of a tuple, including the names, types, and nullability of its attributes. This struct is used in conjunction with the HeapTupleHeaderData struct to represent tuples in memory and on disk.
+
+I hope this helps! Let me know if you have any further questions.
+
+
+
+
+Dan Drust
+When a column gets added to a table and the number of columns grows past the size of the current null bitmap, does postgres have to rewrite the file on disk to grow each tuple header by 1 byte?
+When a column is added to a table in PostgreSQL, and the number of columns grows past the size of the current null bitmap, PostgreSQL has to rewrite the file on disk to grow each tuple header by one byte to accommodate the additional bit.
+
+This is because the null bitmap is stored as a sequence of bits in the tuple header, with each bit corresponding to a column in the table. If the null bitmap is full, and a new column is added, there is no room to add another bit to the bitmap without increasing the size of the header.
+
+To grow the header, PostgreSQL has to rewrite the entire tuple, including the header and the data. This can be an expensive operation, particularly for large tables, as it involves reading and writing a significant amount of data on disk.
+
+However, PostgreSQL provides a way to avoid this costly operation through the use of the ALTER TABLE ... ADD COLUMN ... command with the SET NOT NULL option. When adding a non-null column to a table using this command, PostgreSQL can avoid growing the tuple header by setting the new column to a non-null default value, which ensures that the corresponding bit in the null bitmap remains unset.
+
+Overall, adding a new column to a table in PostgreSQL can be a complex operation that involves modifying the table's schema, the tuple headers, and the data stored on disk. But PostgreSQL provides various mechanisms to minimize the cost of this operation and ensure that it can be performed efficiently, even on large tables.
+
+
+
+
+Dan Drust
+So does the null bitmap only represent columns that don't have a not null constraint?  Is that why postgres can avoid potentially having to grow the null bitmap when adding a column to a table?
+Yes, that's correct. The null bitmap in PostgreSQL's tuple header only represents columns that do not have a NOT NULL constraint. This is because a column with a NOT NULL constraint cannot have a NULL value, so there's no need to store information about whether the column is NULL or not.
+
+When adding a new non-null column to a table using the ALTER TABLE ... ADD COLUMN ... SET NOT NULL command, PostgreSQL can avoid growing the null bitmap by setting the default value of the new column to a non-null value. Since the new column is non-null, there's no need to store any information about whether it's NULL or not in the null bitmap.
+
+However, if a new nullable column is added to the table, or an existing nullable column is modified to become non-null, then PostgreSQL needs to grow the null bitmap in each tuple header to accommodate the additional bit for the new column. In this case, PostgreSQL needs to rewrite the entire tuple, including the header and the data, as mentioned earlier.
+
+It's worth noting that while the null bitmap only represents nullable columns, the actual data values for both nullable and non-nullable columns are stored in the tuple data itself, which is also stored on disk.
+
+
+
+
+Dan Drust
+So what are the files called that hold tuples on disk?
+In PostgreSQL, the files that hold tuples on disk are called "relation files" or "heap files". These files are typically named after the name of the table that they correspond to, with a file extension of ".rel" or ".dat".
+
+Each relation file consists of one or more pages, which are fixed-size blocks of data that can hold multiple tuples. The size of a page is typically 8 KB, although this can be configured when initializing a new database cluster.
+
+Within each page, tuples are stored in a compact format that minimizes storage overhead and provides efficient access to individual tuples. The exact layout of tuples on disk depends on various factors, such as the tuple header size, the presence of variable-length data, and the alignment requirements of the underlying hardware.
+
+To manage access to relation files and pages, PostgreSQL uses a sophisticated buffer management system that provides caching, prefetching, and write-ahead logging capabilities. This system ensures that data is efficiently loaded from disk into memory when needed, and that changes to the data are safely persisted to disk in a transactional manner.
+
+Overall, PostgreSQL's storage architecture is designed to provide a balance between efficient access to data, compact storage of tuples, and robustness against failures and errors.
+
+
+
+
+Dan Drust
+Does any table-level metadata get stored in heap files?
+Yes, heap files in PostgreSQL contain table-level metadata in addition to the actual tuple data. This metadata includes information about the table's schema, such as the names, types, and order of the columns, as well as any constraints, indexes, triggers, or rules associated with the table.
+
+This metadata is stored in a system catalog, which is a set of tables that PostgreSQL uses to store metadata about the objects in the database, including tables, indexes, views, and other database objects. The system catalog is itself stored in a relation file called "pg_catalog".
+
+When a table is created in PostgreSQL, the system catalog is updated with the appropriate metadata, such as the table's name, schema, and column definitions. This metadata is then used to generate the appropriate heap file and pages for storing the actual tuple data.
+
+When a query is executed against a table, PostgreSQL reads the necessary metadata from the system catalog to determine the layout of the tuple data on disk, the location of any indexes, and other information needed to efficiently access and process the data.
+
+Overall, table-level metadata is a critical component of PostgreSQL's storage architecture, as it enables the database to efficiently manage and access the tuple data stored in heap files, and to enforce the necessary constraints and integrity checks on the data.
+
+
+
+
+Dan Drust
+So if I had a table called "users", I wouldn't expect to see any definitions about columns on the users table in the heap files that contain data from the users table.  Instead, I'd expect to see column definitions for the users table in the heap file that stores data for the pg_catalog table?
+No, the table-level metadata for the "users" table is actually stored in the heap file that contains the actual tuple data for that table. The system catalog is a separate set of tables that stores metadata about all of the objects in the database, including the "users" table.
+
+Each table in PostgreSQL has a corresponding heap file that stores the actual tuple data for that table, as well as a set of index files that allow efficient access to the data. The metadata for the table, such as the names, types, and order of the columns, is stored in the heap file itself, typically in a system catalog called "pg_attribute".
+
+The "pg_catalog" system catalog, on the other hand, stores metadata about all of the objects in the database, including tables, indexes, views, and other database objects. It does not contain the actual tuple data or column definitions for individual tables, but rather provides a centralized repository of metadata that can be used to manage and access the various database objects.
+
+So in the case of the "users" table, the table-level metadata, including the column definitions, would be stored in the heap file for the "users" table itself, and not in the "pg_catalog" system catalog. The "pg_catalog" system catalog would contain information about the "users" table, such as its name, owner, and schema, but not the actual column definitions.
+
+
+
+
+Dan Drust
+So in a table's heap file, are column definitions repeated in each page's header?
+No, the column definitions are not repeated in each page's header in a table's heap file in PostgreSQL. Instead, the column definitions are stored in a system catalog called "pg_attribute", which is separate from the heap file.
+
+Each tuple in the heap file contains a header that includes a bitmap indicating which columns are null, as well as information about the length of the tuple and the location of the tuple's data within the page. However, the header does not include the column definitions themselves.
+
+When a query is executed against a table, PostgreSQL retrieves the necessary column definitions from the "pg_attribute" system catalog in order to interpret the tuple data in the heap file. This allows the database to efficiently manage the storage of the tuple data, while also providing the flexibility to change the table's schema over time.
+
+It's worth noting that there are other types of metadata that are stored in a table's heap file in addition to the tuple data. For example, each page in the heap file contains a header that includes information about the page's size, the number of tuples stored on the page, and other metadata that is used to manage the storage of the tuple data. However, the column definitions themselves are not stored in the heap file's page header.
+
+
+
+
+Dan Drust
+Can a table have many heap files?  Or is this always a one-to-one relationship?
+In PostgreSQL, each table has exactly one heap file. The heap file contains the actual tuple data for the table, as well as metadata such as the tuple header and page layout information.
+
+However, a table can have multiple associated index files, which are separate from the heap file. These index files are used to provide efficient access to the tuple data based on the values of one or more columns.
+
+When a new index is created on a table, PostgreSQL creates a new file to store the index data. This file is separate from the heap file, and can be located on a different disk or file system if desired. Each index file contains metadata about the index, as well as pointers to the corresponding tuple data in the heap file.
+
+So while a table has exactly one heap file, it can have multiple index files associated with it.
+
+
+
+
+Dan Drust
+You said "Each index file contains metadata about the index, as well as pointers to the corresponding tuple data in the heap file".  Since these are stored on disk, do the "pointers" practically consist of a reference to a particular heap file's page and an offset from the start of that page where a particular tuple can be found?
+Yes, that's correct. In PostgreSQL, each index file contains metadata about the index, as well as pointers to the corresponding tuple data in the heap file. These pointers consist of a reference to a particular heap file's page and an offset from the start of that page where a particular tuple can be found.
+
+More specifically, each index entry contains a key value and a pointer to the location of the corresponding tuple in the heap file. The pointer consists of a block number and an offset within that block. The block number identifies the specific page in the heap file where the tuple can be found, and the offset specifies the byte offset within the page where the tuple's data begins.
+
+When an index is searched, PostgreSQL reads the index entries to determine which tuples match the search condition, and then uses the pointers to retrieve the corresponding tuples from the heap file. By using these pointers, PostgreSQL can efficiently access the tuple data without having to scan the entire heap file.
+
+
+
+
+Dan Drust
+You mentioned earlier that blocks in postgres are 8kb.  Why?  I would've expected them to be 4kb to match most OS page sizes.
+PostgreSQL uses 8KB as the default block size for storing data on disk, because this block size has been found to offer a good balance between performance and disk space usage.
+
+While the 4KB page size used by many operating systems might seem like a natural choice, it's not always the most efficient for database workloads. In particular, using larger block sizes can reduce the number of I/O operations required to read or write a large amount of data. This can result in faster database performance, especially when dealing with large tables or indexes.
+
+However, it's worth noting that changing the block size used by PostgreSQL can have significant implications for database performance and disk space usage. In general, it's best to stick with the default block size unless you have a specific reason to use a different size, and you should carefully evaluate the potential trade-offs before making any changes.
+
+
+
+
+Dan Drust
+What's the max number of block that postgres holds in memory at once?
+The maximum number of blocks that PostgreSQL can hold in memory at once is controlled by the shared_buffers configuration parameter. This parameter specifies the amount of memory that PostgreSQL can use for caching data blocks in RAM.
+
+Each block in the shared buffer cache is typically 8KB (the default block size), so the total number of blocks that can be cached is equal to the shared buffer size divided by 8KB. For example, if shared_buffers is set to 4GB (4,096MB), then the maximum number of blocks that can be cached is 4,096MB / 8KB = 524,288 blocks.
+
+It's important to note that shared_buffers is a crucial configuration parameter that can have a big impact on database performance. Setting it too low can result in frequent disk I/O, which can slow down queries and overall database performance. On the other hand, setting it too high can consume too much memory and potentially cause swapping or other memory-related issues. It's generally recommended to set shared_buffers to a value that is appropriate for your database workload and hardware resources, and to monitor system resources carefully to ensure that performance is optimized.
+
+
+
+
+Dan Drust
+What is `shared_buffers` set to by default?
+The default value of shared_buffers in PostgreSQL depends on the version of PostgreSQL and the platform you are using.
+
+In recent versions of PostgreSQL (10 and later), the default value of shared_buffers is typically set to 25% of available RAM, up to a maximum of 4GB. For example, if your system has 16GB of RAM, the default value of shared_buffers would be 4GB.
+
+In earlier versions of PostgreSQL (9.6 and earlier), the default value of shared_buffers was typically set to a much lower value, such as 128MB or 1/32 of available RAM.
+
+It's important to note that the default value of shared_buffers may not be optimal for your particular database workload and hardware configuration, so it's a good idea to experiment with different values to find the best setting for your system.
+
+
+
+
+Dan Drust
+Does postgres open an entire heap file when it needs to grab a block from it?  Or does it use some other technique for mapping disk memory into ram?
+When PostgreSQL needs to read a block from a heap file, it uses the operating system's file system caching mechanism to load the block into memory. The operating system caches recently accessed file blocks in RAM, so when PostgreSQL requests a block, the operating system checks if the block is already in its cache. If the block is in the cache, it can be quickly read from memory without needing to access the disk.
+
+If the block is not in the cache, the operating system will read the block from the disk and load it into memory. The block is then added to the file system cache, so that subsequent requests for the same block can be satisfied more quickly.
+
+It's worth noting that the PostgreSQL buffer manager (which manages the shared buffer cache) sits on top of the operating system's file system cache. When a block is requested, the buffer manager checks if the block is already in the shared buffer cache. If it is, the block is quickly returned from memory. If not, the buffer manager will request the block from the operating system's file system cache or read it from disk if necessary, and then store it in the shared buffer cache for subsequent access.
+
+So, in summary, PostgreSQL does not open an entire heap file when it needs to grab a block from it. Instead, it relies on the operating system's file system cache to manage disk I/O and caching of recently accessed blocks.
+
+
+
+
+Dan Drust
+So does postgresql's buffer manager keep references to blocks that are already in RAM?
+Yes, PostgreSQL's buffer manager keeps references to blocks that are already in RAM. The buffer manager maintains a pool of shared buffers in memory, and each buffer corresponds to a block of data from a table or index file on disk. When a block is read from disk into a buffer, the buffer manager assigns a unique identifier (called a "block number") to the buffer that corresponds to the location of the block in the file.
+
+Once a block is in memory, the buffer manager can quickly locate it by its block number, without needing to perform any disk I/O. This allows frequently accessed blocks to be quickly retrieved from memory instead of being read from disk each time they are needed.
+
+When a block is modified in memory, the buffer manager also marks the corresponding buffer as "dirty". This indicates that the contents of the buffer are different from the contents of the block on disk, and that the changes need to be written back to disk at some point in the future.
+
+So, in summary, the buffer manager in PostgreSQL keeps references to blocks that are already in RAM by maintaining a pool of shared buffers in memory and assigning unique block numbers to each buffer. This allows frequently accessed blocks to be quickly retrieved from memory and modified blocks to be efficiently written back to disk.
+
+
+
+
+Dan Drust
+Does postgres keep information about the dirtiness of a block in the block itself?  Or in a separate struct?  It seems like tracking additional data outside of the 8K block size would cause cache-optimized structures to become less performant.
+In PostgreSQL, the information about whether a block is "dirty" or not is not stored directly in the block itself, but rather in a separate buffer descriptor data structure that contains metadata about the buffer.
+
+Each buffer descriptor contains information about the buffer's state, including whether it is "valid" (i.e., the block is currently in memory), "dirty" (i.e., the contents of the buffer have been modified since the last write to disk), and "pinned" (i.e., the buffer is currently in use and cannot be evicted from the buffer pool). The buffer descriptors are stored in a shared memory area called the "buffer control block" (BCB), which is separate from the data files on disk.
+
+When a block is read into a buffer from disk, the corresponding buffer descriptor is updated to reflect that the block is now valid and not dirty. When the block is modified, the buffer descriptor is marked as dirty.
+
+When it's time to flush dirty buffers back to disk, PostgreSQL iterates over the buffer descriptors in the buffer pool to find the dirty ones, and writes them back to disk. So, the buffer descriptors are used to track the state of the buffers, and the information about the buffer's state is not stored directly in the block itself.
+
+By storing this information separately from the block, PostgreSQL is able to maintain high performance by avoiding the overhead of storing metadata within each block. Additionally, this separation allows for more efficient management of the buffer pool, as buffer descriptors are typically much smaller than the data blocks themselves, and can be more easily moved around in memory.
+
+
+
+
+Dan Drust
+So does the buffer control block contain a buffer descriptor for EVERY block that the database manages, whether or not it's in memory at the time? 
+No, the buffer control block (BCB) in PostgreSQL does not contain a buffer descriptor for every block that the database manages. Instead, the BCB contains a fixed-size array of buffer descriptors that corresponds to the size of the shared buffer pool.
+
+The shared buffer pool is a region of memory that is used to cache frequently-accessed data blocks from the underlying storage system. Each buffer descriptor in the BCB corresponds to one buffer in the shared buffer pool.
+
+When a block needs to be read from disk, PostgreSQL first checks if the block is already in memory by looking up its buffer descriptor in the BCB. If the block is not in memory, PostgreSQL allocates a free buffer from the shared buffer pool and updates the corresponding buffer descriptor in the BCB to point to the new buffer.
+
+If there are more blocks in the database than there are buffer descriptors in the BCB, not all blocks will have a corresponding buffer descriptor. In this case, PostgreSQL will use a "clock sweep" algorithm to evict older, less frequently-used buffers from the buffer pool to make room for new ones. When a buffer is evicted, its corresponding buffer descriptor is marked as invalid and reused for another buffer when needed.
+
+
+
+
+Dan Drust
+So what's the use of the "valid" flag in a buffer descriptor, if a buffer descriptor only ever exists when the buffer is in memory
+The "valid" flag in a buffer descriptor is used to indicate whether the buffer descriptor is currently in use or not. When a buffer is first allocated from the shared buffer pool, its corresponding buffer descriptor is marked as valid to indicate that it is currently in use. When a buffer is evicted from the buffer pool, its corresponding buffer descriptor is marked as invalid to indicate that it is no longer in use.
+
+The valid flag is necessary because not all buffer descriptors in the buffer control block (BCB) are always in use. The size of the BCB is fixed and corresponds to the maximum number of buffers that can be held in memory at any given time. However, the number of buffers that are actually in use can vary over time as blocks are read from or written to disk.
+
+So, the valid flag is used to keep track of which buffer descriptors are currently in use and which are not. When PostgreSQL needs to allocate a new buffer from the shared buffer pool, it searches through the buffer descriptors in the BCB until it finds one that is marked as invalid and can be reused.
