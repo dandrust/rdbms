@@ -86,8 +86,22 @@ Ideas:
   * https://stackoverflow.com/questions/6701103/understanding-ruby-and-os-i-o-buffering
 * The whole reason I went on the path of binary encoding is that I wanted to be able to easily grab data to sort without having to worry about that data spilling over a boundary (ie, 4096 bytes)
 
+## April 28, 2023
 I've come back to this after a week or so away. I'd gotten a little bogged down with wanting to know everything before doing anything.  After taking stock, I'd really like to use the Berkely lectures as a guide so I'll stick to that content.  I went on the side quest with making a binary-encoded format so that I could reliably grab a chunk of data without worrying that I'd grab half a record at the end of the chunk. In doing that, I realized that fixed-size records worked great when there were integers, floats, and timestamps involved. But strings were a bit trickier!  So I expanded my file format but in doing so I wasn't careful about boundaries, so I was back at square one where if I grab a predetermined chunk of data I might have a tuple that spans the boudnary.
 
 So today I revisited the way that I'm inserting tuples so that I don't write a record across a 4096 byte boundary (0x1000). However, that breaks code that reads back the records! 
 
 For next time: How will I have the code reading a file know that it's reached the last tuple on a 4kb block? As long as the first long it reads is zero, will that be enough to signal that it's time to grab a new block?
+
+# April 29 2023:
+*Goal*: Modify relation scan iterator code to deal with data gaps at page boundaries
+
+*Solution*: Add a tuple header that includes a non-null byte to indicate that a tuple is present
+
+A bit of a winding road this morning.  Initially I thought that putting a 2 byte integer representing tuple size would work nicely. If we read a zero size, then the reader can just keep reading until it reads on non-zero size.
+
+The issue with that approach was that the padding at the end of a 4kb page could be and odd number of bytes - which meant that reading a 16 bit int would pick up "junk" data past the 4kb page boundary.
+
+My simple solution was to include a tuple header whose first by is non-zero, and then read only a single byte to determine presence.  If a null byte is read, it's essentially a "null tuple" header.
+
+This means that records no longer span the 4kb boundary! Next time, I can look into reading a 4kb page at a time. That gets me back on track to work on the out-of-core merge sort algorithm -- being able to read some fixed number of pages at a time, sort those, and write the sorted set back to disk.
