@@ -90,10 +90,12 @@ class Relation
   # for simplicity, I'm assuming that EVERYTHING must be present
   # TODO: Increment the relation's counter when something's inserted
   def insert(tuple)
-    
+    # initialize vars
     buffer = []
-    template_string = ""
+    template_string = "S" # first element is a 16 bit tuple header (size)
+    tuple_size = 2        # size occupies 2 bytes
 
+    # pack the buffer with the tuple data
     fields.each do |label, metadata|
       value = tuple[label]
 
@@ -101,12 +103,18 @@ class Relation
         template_string += metadata[:template].call(value)
         content_length = metadata[:size].call(value)
         buffer += [content_length, value]
+        tuple_size += content_length
       else
         template_string += metadata[:template]
         buffer << value
+        tuple_size += metadata[:size]
       end
     end
 
+    # add tuple header
+    buffer.unshift(tuple_size)
+
+    # write to disk
     file.seek(0, :END) # append!
 
     position = file.pos # EOF
