@@ -30,8 +30,6 @@ class Relation
   end
 
   # 'movies.db'
-  # TODO [Reliable Pages]: detect when there are no more tuples in a page
-  #                        consider page headers?
   def self.from_new_db_file(path)
     f = File.open(path, 'r+')
     header_length, _ = *f.read(4).unpack("L")
@@ -45,6 +43,58 @@ class Relation
       pos = header_length
       loop do
         f.pos = pos
+        tuple = []
+        header.fields.each do |_, metadata|
+          if metadata[:name] == :string
+            content_length, _ = f.read(2).unpack("S")
+            value_length = content_length - 2
+            value, _ = f.read(value_length).unpack("A#{value_length}")
+            pos += content_length
+          else
+            value, _ = f.read(metadata[:size]).unpack(metadata[:template])
+            pos += metadata[:size]
+          end
+          tuple << value
+        end
+        yielder << tuple
+      end
+    end
+
+    new(header.fields, enumerator, f)
+  end
+
+  # 'updated_movies_with_tuple_headers.db'
+  def self.from_new_new_db_file(path)
+    f = File.open(path, 'r+')
+    header_length, _ = *f.read(4).unpack("L")
+    f.rewind
+
+    header_buffer = f.read(header_length)
+
+    header = Relation::Header.load(header_buffer)
+
+    enumerator = Enumerator.new do |yielder|
+      pos = header_length
+      loop do
+        f.pos = pos
+        
+        # read tuple header
+        begin
+          tuple_present, size = f.read(3).unpack("CS")
+        rescue
+          raise StopIteration
+        end
+        # puts "At #{pos}"
+        # puts "tuple header: present: #{tuple_present}; size: #{size}"
+        if tuple_present.zero?
+          # print "!!! Null byte detected at #{pos}. "
+          pos += 1
+          # puts "Position incremented to #{pos}."
+          next 
+        end
+        
+        pos += 3
+
         tuple = []
         header.fields.each do |_, metadata|
           if metadata[:name] == :string
@@ -92,8 +142,8 @@ class Relation
   def insert(tuple)
     # initialize vars
     buffer = []
-    template_string = "S" # first element is a 16 bit tuple header (size)
-    tuple_size = 2        # size occupies 2 bytes
+    template_string = "CS" # first element is a 1 byte header
+    tuple_size = 3         # header occupies 1 byte, size occupies 2 bytes
 
     # pack the buffer with the tuple data
     fields.each do |label, metadata|
@@ -112,7 +162,8 @@ class Relation
     end
 
     # add tuple header
-    buffer.unshift(tuple_size)
+    header = [1, tuple_size]
+    buffer.prepend(*header)
 
     # write to disk
     file.seek(0, :END) # append!
@@ -158,7 +209,6 @@ class Relation
         pos += field_label_length
 
         definitions[field_label.to_sym] = DataTypes[field_definition_data_type]
-        puts definitions
       end
 
       new(record_count, definitions)

@@ -1,8 +1,8 @@
 require_relative '../relation'
 
-updated_movies = Relation.from_new_db_file('updated_movies.db')
+relation = Relation.from_new_new_db_file('updated_movies_with_tuple_headers.db')
 
-updated_movies.data.each do |tuple|
+relation.data.each do |tuple|
   puts tuple.last # this should be the movie title
 end
 
