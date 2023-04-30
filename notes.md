@@ -105,3 +105,27 @@ The issue with that approach was that the padding at the end of a 4kb page could
 My simple solution was to include a tuple header whose first by is non-zero, and then read only a single byte to determine presence.  If a null byte is read, it's essentially a "null tuple" header.
 
 This means that records no longer span the 4kb boundary! Next time, I can look into reading a 4kb page at a time. That gets me back on track to work on the out-of-core merge sort algorithm -- being able to read some fixed number of pages at a time, sort those, and write the sorted set back to disk.
+
+
+# Questions from IO class
+* What is fcntl? (syscall)
+* What is ioctl? (syscall)
+* What is fsync? (syscall)
+* pread is atomic....huh?
+* read takes an output buffer - could that be a good way to read a page?
+  * then, would I have a StringIO instance?  Is that a thing?
+* IO#sync -> skips ruby bufferring, but doesn't guarantee that OS isn't buffering data
+
+# Sorting
+* Load the data into memory by scanning the table and populating an array
+* Sort the array according to a predicate
+* Write the data to a file
+
+# April 29, 2023 Pt 2
+I re-built the ratings database file to use the updated format that I worked out this morning.  From there, I played around with `IO.pread` (*positional* read) to grab a 4kb chunk at a 4096 byte offset. Worked like a charm!
+
+From there, I started extracting the table-scanning iterator into it's own executor class.  Since you can wrap a string with the `StringIO` class, the `Scanner` class can take a `File` or a `StringIO`.
+
+Finally, `sort_chunk.rb` is a proof-of-concept for reading a chunk of a database file, sorting it in-memory, and then writing the result back to disk.
+
+Next up is to write an out-of-core sorting algorithm to sort the entire ratings database file!
