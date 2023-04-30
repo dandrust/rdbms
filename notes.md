@@ -129,3 +129,12 @@ From there, I started extracting the table-scanning iterator into it's own execu
 Finally, `sort_chunk.rb` is a proof-of-concept for reading a chunk of a database file, sorting it in-memory, and then writing the result back to disk.
 
 Next up is to write an out-of-core sorting algorithm to sort the entire ratings database file!
+
+# April 30, 2023
+**Goal**: Sort the ratings.db file by creation timestamp without reading the entire file into memory.
+
+Sorting algo
+x   x    x    x    x    x   - read a set into memory
+  x        x         x      - stream the tuples
+      x              x      - stream the tuples
+             x - sorted file

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'data_types.rb'
+require_relative 'scanner.rb'
 
 class Relation
   attr_reader :data, :fields, :file
@@ -53,8 +54,15 @@ class Relation
     new(header.fields, enumerator, f)
   end
 
-  def self.from_string(string)
-    
+  def self.from_headless_db_file(path, header)
+    f = File.open(path, 'r')
+    scanner = Scanner.new(f, header)
+
+    new(header.fields, scanner, f)
+  end
+
+  def self.pluck_header(path)
+
   end
 
   # labels may only be 239 bytes/chars long (255 - 16)
