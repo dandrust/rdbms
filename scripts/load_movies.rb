@@ -1,18 +1,20 @@
 require_relative '../relation'
 require 'csv'
 
-Relation.create('updated_movies', { movie_id: DataTypes::INTEGER, title: DataTypes::STRING })
+Relation.create('updated_ratings_with_tuple_headers', { user_id: DataTypes::INTEGER, movie_id: DataTypes::INTEGER, rating: DataTypes::FLOAT, created_at: DataTypes::TIMESTAMP })
 
-updated_movies_relation = Relation.from_new_db_file('updated_movies.db')
+relation = Relation.from_new_db_file('updated_ratings_with_tuple_headers.db')
 
-movies = CSV.open('movies.csv', headers: true)
+movies = CSV.open('ratings.csv', headers: true)
 movies.each do |row|
   tuple = {
+    user_id: row["userId"].to_i,
     movie_id: row["movieId"].to_i,
-    title: row["title"]
+    rating: row["rating"].to_f,
+    created_at: row["timestamp"].to_i
   }
-  updated_movies_relation.insert(tuple)
+  relation.insert(tuple)
 end
 
 movies.close
-updated_movies_relation.file.close
+relation.file.close

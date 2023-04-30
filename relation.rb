@@ -5,34 +5,8 @@ require_relative 'data_types.rb'
 class Relation
   attr_reader :data, :fields, :file
 
-  def self.from_csv(*args)
-    csv = CSV.open(*args)
-    enumerator = csv.each.map(&:to_h).map(&:values).to_enum
-
-    new(csv.headers, enumerator)
-  end
-
-  # 'ratings.db'
-  def self.from_db_file(fields, path, record_length, binary_template_string)
-    f = File.open(path, 'r')
-    enumerator = Enumerator.new do |yielder|
-      loop do 
-        data = f.read(record_length)
-        if data
-          yielder << data.unpack(binary_template_string)
-        else
-          raise StopIteration
-        end
-      end
-    end
-  
-    new(fields, enumerator)
-  end
-
-  # 'movies.db'
-  # TODO [Reliable Pages]: detect when there are no more tuples in a page
-  #                        consider page headers?
-  def self.from_new_db_file(path)
+  # 'updated_movies_with_tuple_headers.db'
+  def self.from_db_file(path)
     f = File.open(path, 'r+')
     header_length, _ = *f.read(4).unpack("L")
     f.rewind
@@ -45,6 +19,20 @@ class Relation
       pos = header_length
       loop do
         f.pos = pos
+        
+        # read tuple header
+        begin
+          tuple_present, size = f.read(3).unpack("CS")
+        rescue
+          raise StopIteration
+        end
+        if tuple_present.zero?
+          pos += 1
+          next 
+        end
+        
+        pos += 3
+
         tuple = []
         header.fields.each do |_, metadata|
           if metadata[:name] == :string
@@ -65,9 +53,14 @@ class Relation
     new(header.fields, enumerator, f)
   end
 
+  def self.from_string(string)
+    
+  end
+
   # labels may only be 239 bytes/chars long (255 - 16)
   # { movie_id: DataTypes::INTEGER, created_at: DataTypes::TIMESTAMP }
   # { movie_id: DataTypes::INTEGER, title: DataTypes::STRING }
+  # { user_id: DataTypes::INTEGER, movie_id: DataTypes::INTEGER, rating: DataTypes::FLOAT, created_at: DataTypes::TIMESTAMP }
   def self.create(name, field_defs)
     header = Header.new(0, field_defs)
     
@@ -90,10 +83,12 @@ class Relation
   # for simplicity, I'm assuming that EVERYTHING must be present
   # TODO: Increment the relation's counter when something's inserted
   def insert(tuple)
-    
+    # initialize vars
     buffer = []
-    template_string = ""
+    template_string = "CS" # first element is a 1 byte header
+    tuple_size = 3         # header occupies 1 byte, size occupies 2 bytes
 
+    # pack the buffer with the tuple data
     fields.each do |label, metadata|
       value = tuple[label]
 
@@ -101,12 +96,19 @@ class Relation
         template_string += metadata[:template].call(value)
         content_length = metadata[:size].call(value)
         buffer += [content_length, value]
+        tuple_size += content_length
       else
         template_string += metadata[:template]
         buffer << value
+        tuple_size += metadata[:size]
       end
     end
 
+    # add tuple header
+    header = [1, tuple_size]
+    buffer.prepend(*header)
+
+    # write to disk
     file.seek(0, :END) # append!
 
     position = file.pos # EOF
@@ -150,7 +152,6 @@ class Relation
         pos += field_label_length
 
         definitions[field_label.to_sym] = DataTypes[field_definition_data_type]
-        puts definitions
       end
 
       new(record_count, definitions)
