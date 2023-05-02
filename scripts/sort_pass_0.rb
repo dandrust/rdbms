@@ -31,7 +31,7 @@ temp_files = 280.map do |n|
     Scanner
     .new(StringIO.new(chunk), header)
     .to_a
-    .sort { |a, b| a[3] <=> b[3] }
+    .sort { |a, b| a[3] <=> b[3] } # TODO: hard coded to be ascending sort
   print "done"
   
   print "\t Writing sorted results..."
@@ -50,49 +50,64 @@ f.close
 # [[], [], []]
 queue = [temp_files]
 pass_no = 0
+last_pass = false
+out = nil
+
 while !queue.empty?
-  # Pass definition
   pass_queue = queue.shift
+  puts "starting to process queue with #{queue.length} paths"
+  if pass_queue.size <= 50
+    puts "queue size is under memory tolerance threshold. Expect return"
+    last_pass = true 
+  end
+  next_queue = []
 
-  pass_queue.each_slice(2) do |path_a, path_b, n|
-    # TODO: Deal with nil arg - meaning there's an odd number. Simply pass the file through to next pass
-    destination_path = "sort_2023_4_29/ratings_sort_pass_#{pass_no}_#{n}.db"
+  pass_queue.each_slice(50).with_index do |paths, n|
+    # puts "initializing demux sorter with #{paths.length} scanners (pass #{pass_no}, iteration #{n})"
+    scanners = paths.map do |path|
+      print "."
+      to_read = File.open(path, 'r')
+      Scanner.new(to_read, header)
+    end
+    puts "done"
     
-    to_be_sorted = DemuxSort.new(iterator_a, iterator_b)
+    sorter = DemuxSort.new(*scanners, value_index: 3)
 
-    to_be_sorted.each do |next_tuple|
+    if last_pass
+      "breaking!"
+      out = sorter
+      break
+    end
+    
+    destination_path = "sort_2023_4_29/ratings_sort_pass_#{pass_no}_#{n}.db"
+    puts "creating temp file #{destination_path}"
+    destination_file = File.open(destination_path, 'a')
+    destination = Relation.new(header.fields, nil, destination_file)
+
+    puts "iterating through sorter, writing to temp file"
+    sorter.each do |t|
+      # print "."
       destination.insert(user_id: t[0], movie_id: t[1], rating: t[2], created_at: t[3])
     end
+    # puts "done"
+
+    puts "closing temp file"
+    destination_file.close
+
+    puts "pushing #{destination_path} to next queue"
+    next_queue << destination_path
   end
 
+  if next_queue.empty?
+    puts "queue is empty, expecting to exit loop"
+  else
+    puts "pushing next queue to mother queue"
+    puts next_queue.to_s
+    queue << next_queue  
+  end
+  
   pass_no += 1
 end
-
-
-class DemuxSort < Enumerator
-  def initialize(*scanners)
-    @scanners = scanners
-
-    @next_values = scanners.map(&:next)
-
-    super() do |y|
-      min_value = next_values.min
-      min_index = next_values.index_of(min_value)
-
-      begin
-        replacement_value = scanners[min_index].next
-        next_values[min_index] = replacement_value
-      rescue StopIteration
-        # remove the iterator and value from the arrays
-      end
-
-      y << min_value
-    end
-  end
-end
-
-
-  
 
 # temp_file.rewind
 # sorted_iter = Scanner.new(temp_file, header)

@@ -138,3 +138,114 @@ x   x    x    x    x    x   - read a set into memory
   x        x         x      - stream the tuples
       x              x      - stream the tuples
              x - sorted file
+
+
+**Goal**: Finish implementing a DemuxSort class, see it working
+
+Completing the implementation of `DemuxSort` took longer than anticipated because I forgot to put a looping construct in the enumerator and spun my wheels debugging.  In any case, it's done!
+
+For a manual test I initialized three scanners and passed them to the sorting class, ordering by timestamp.  It worked!  However, I was puzzled when I tried sorting by a different column and direction.  The results were chaotic.  BUT! That's because the scanner sources need to be ordered in the same way that the demux sorter is ordering.  Otherwise the algorithm doesn't make sense.  You can't divide and conquer if your strategy changes between the diving and the conquering!  My puzzled looks near the end of the video can be resolved.
+
+My puzzlement led me to want to put `DemuxSort` under test next time, but I don't think I will. It would be nice to have things under test, but I think that might deflate my motivation. Instead, I'd like to get back to implementing the pass 1..n code.
+
+Of note, the divide and conquer strategy seems useful for a general case -- even if the dataset to be sorted isn't so large to require out-of-core sorting.  That is, it may be useful to still operate on chunks of data (eg, 4kb) and sort those, then put the sorted pages behind a demux sort interface.  In that case, I'd think that the `DemuxSort` implementation I have is nice because it takes a scanner instance and the scanner can worry about the details of what and how it's scanning.  Though, I should be sure that scanners reading from disk are reading 4kb at a time so that we get enough data for each IO.
+
+Next time, finish up pass 1..n loop!
+
+**Goal:** Implement pass 1..n, see it working
+
+I may go on a side quest to write a buffer management layer so that I can have some constraints to work with (eg, only allow 64 4kb buffers at a time). That would also allow me to think more in buffers and pages and to design iterators around those abstractions (whereas now, I'm just using Ruby's buffering and, as far as my Ruby code is concerned, constantly doing small reads from the underlying file). As a bonus, I could incorporate some multithreading where I have a "warm" buffer that's being filled as a main buffer is being drained.
+
+
+**Goal:** Sketch out a buffer pool concept, thinking about file management
+
+File -> entire db file
+Page -> 4kb chunk of a file (tuples across bounadry)
+Buffer -> 4kb StringIO object in Ruby, representing a page in a file
+
+Relation might hold a reference to it's file's path
+The actual file IO happens in the buffer pool
+  - responsible for opening and closing and reading and writing to persistent storage
+  - Responsibilities
+    - Managing a limited set of in-memory objects
+    - Managing file IO
+
+```ruby
+class ByteArray
+  def initialize(size)
+    [].pack(template)
+  end
+
+  def [](idx)
+  end
+
+  def template
+    # depending on size, choose a suitable type
+  end
+end
+```
+
+```ruby
+BufferPool.load_page(file_path, page_no)
+
+# Asks the buffer pool to fetch the first page of the underlying file
+# In order to get field information
+Relation.new(path)
+
+
+# DML
+
+# Asks the buffer pool to fetch the last page of the underlying file
+# writes a tuple to the buffer
+# write the buffer back to the file
+relation.insert(tuple)
+
+# Updates and deletes follow a similar pattern as insert:
+#  - Read a page from persistent storage
+#  - modify the page in memory
+#  - write the entire page back to persistent storage
+
+# Querying
+
+# Relation holds the PATH
+# Scan requests the first page
+# Scan iterates through the first page's tuples
+# Scan requests the second page
+# ...
+# Scan raises StopIteration
+Scan.new(relation)
+
+relation.size times do |n|
+  b = BufferPool.get_page(relation, n)
+  while ...
+    y << tuple
+  end
+end
+
+i = relation[1]
+...iterate
+i = relation[2]
+...iterate
+i = relation[3]
+
+
+# Relation holds the PATH
+# Sort requests X buffers
+# Sort sorts each of the buffers in memory 
+#  - be careful to indicate that these aren't modifications to the relation)
+# Sort demultiplexes the sorted buffers to iterate
+Sort.new(relation, column, direction)
+
+# Example use case: GROUP BY
+# Relation holds the PATH
+# Hash would request X buffers (empty)
+# Hash would write tuples to buffers
+# ...
+HashThing.new(relation)
+
+# No buffers required?
+# It's just a stitcher with two iterators upstream
+NestedLoopJoin.new(a, b, conditions)
+```
+
+Next time, implement a scan node iterator that's buffer-aware. Have the scan node indicate when it's done with a buffer
