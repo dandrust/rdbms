@@ -4,7 +4,7 @@ require_relative 'data_types.rb'
 require_relative 'scanner.rb'
 
 class Relation
-  attr_reader :data, :fields, :file, :path
+  attr_reader :data, :fields, :file, :path, :header
 
   # 'updated_movies_with_tuple_headers.db'
   def self.from_db_file(path)
@@ -51,14 +51,14 @@ class Relation
       end
     end
 
-    new(header.fields, enumerator, f, path)
+    new(header.fields, enumerator, f, path, header)
   end
 
   def self.from_headless_db_file(path, header)
     f = File.open(path, 'r')
     scanner = Scanner.new(f, header)
 
-    new(header.fields, scanner, f, path)
+    new(header.fields, scanner, f, path, header)
   end
 
   # labels may only be 239 bytes/chars long (255 - 16)
@@ -75,11 +75,12 @@ class Relation
     f.close
   end
 
-  def initialize(fields, data, file, path)
+  def initialize(fields, data, file, path, header)
     @fields = fields
     @data = data
     @file = file # should this be here? NO!
     @path = path
+    @header = header
   end
 
   # {movie_id: 1, user_id: 2, rating: 4.5, created_at: 12345}
@@ -159,13 +160,14 @@ class Relation
         definitions[field_label.to_sym] = DataTypes[field_definition_data_type]
       end
 
-      new(record_count, definitions)
+      new(record_count, definitions, header_length)
     end
 
     # { movie_id: DataTypes::INTEGER, created_at: DataTypes::TIMESTAMP, hello_this_is_my_really_long_column_name: DataTypes::TIMESTAMP, oh_hey_heres_another_really_extremely_long_and_descriptive_column_name: DataTypes::TIMESTAMP }
-    def initialize(record_count, fields)
+    def initialize(record_count, fields, length)
       @record_count = record_count
       @fields = fields
+      @length = length
     end
 
     def to_s

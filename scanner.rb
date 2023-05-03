@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'buffer_pool'
+
 class Scanner < Enumerator
 
   def initialize(relation)
@@ -8,7 +10,7 @@ class Scanner < Enumerator
     super() do |yielder|
       page_no = 0
       buffer = BufferPool.get_page(relation, 0)
-      pos = 0
+      pos = relation.header.length
 
       loop do
         buffer.pos = pos
