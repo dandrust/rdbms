@@ -4,7 +4,7 @@ require_relative 'data_types.rb'
 require_relative 'scanner.rb'
 
 class Relation
-  attr_reader :data, :fields, :file
+  attr_reader :data, :fields, :file, :path
 
   # 'updated_movies_with_tuple_headers.db'
   def self.from_db_file(path)
@@ -51,18 +51,14 @@ class Relation
       end
     end
 
-    new(header.fields, enumerator, f)
+    new(header.fields, enumerator, f, path)
   end
 
   def self.from_headless_db_file(path, header)
     f = File.open(path, 'r')
     scanner = Scanner.new(f, header)
 
-    new(header.fields, scanner, f)
-  end
-
-  def self.pluck_header(path)
-
+    new(header.fields, scanner, f, path)
   end
 
   # labels may only be 239 bytes/chars long (255 - 16)
@@ -79,10 +75,11 @@ class Relation
     f.close
   end
 
-  def initialize(fields, data, file)
+  def initialize(fields, data, file, path)
     @fields = fields
     @data = data
-    @file = file # should this be here?
+    @file = file # should this be here? NO!
+    @path = path
   end
 
   # {movie_id: 1, user_id: 2, rating: 4.5, created_at: 12345}

@@ -249,3 +249,38 @@ NestedLoopJoin.new(a, b, conditions)
 ```
 
 Next time, implement a scan node iterator that's buffer-aware. Have the scan node indicate when it's done with a buffer
+
+
+May 2, 2023
+**Goal**: Update the scanner class to be page-aware, using `BufferPool` to fetch data from disk during iteration
+
+May 2, 2023, Pt 2
+**Goal**: Use the scanner to iterate through a large database file with an out of memory error; Implement reference counting for buffers in the buffer pool
+
+Reference counting is in place! Clients can use `BufferPool.get_page(relation, page_no)` to get a buffer with the page's contents. When finished, clients can `.return_page(buffer)` to the pool. If two clients request the same page it will be re-used and usage counted accordingly. If all buffers are full when a new page is requested we'll evict a page that's not being used (ie, `refcount: 0`) and bring in the new page. If all buffers are full and in-use, an exception is raised.
+
+I was looking at my entry from a few days ago when I wrapped up out-of-core sorting. At that point I was ready to swear off sorting to move onto other things, but now that I have a nice `Buffer` abstraction I think it might be fun to revisit the sorting exercise (though probably with a smaller dataset). With a fixed buffer pool page size, my `Sort` node would know if it should try sorting the dataset in-memory or out-of-core.
+
+I may start there next time.  After that, I think I should return to the lecture videos and work through hashing.  Hopefully with having spent so much time on foundational work during sorting, hashing will go quicker.
+
+
+```ruby
+# debugging
+require_relative "relation"
+require_relative "buffer_pool"
+
+ratings = Relation.from_db_file('ratings.db')
+s = Scanner.new(ratings)
+s.each.with_index { |_, n| puts n }
+
+r = Relation.from_db_file("movies.db")
+
+(0..63).to_a.shuffle.each do |n|
+  BufferPool.get_page(r, n)
+end
+
+buffer = BufferPool.get_page(r, 1)
+BufferPool.return_page(buffer)
+BufferPool.return_page(buffer)
+```
+
