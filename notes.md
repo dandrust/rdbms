@@ -284,3 +284,94 @@ BufferPool.return_page(buffer)
 BufferPool.return_page(buffer)
 ```
 
+**Goal**: Implement an in-core sorting node using an abbreviated data set
+
+Progress was slow. I tried wrting 20 pages from the `movies.db` to a smaller database file but when I read it back I got an error.  It turns out the scanner was reading the header as tubles, so I needed to offset the initial position by header length at the start.  So I fixed that.
+
+Then I noticed when I was scanning the movies.db file that the last id was 190, when in the CSV version it was much higher. The id overflowed a short (16 bit) unsigned int, so I need to update the integer type to be 4 bytes wide. In the data type definition, I updated the template string to be "L" (long) but didn't update the byte size to be 4. So that led to a little debugging side quest!
+
+In the end, I was able to rebuild the `movies.db` file to use long integers. I read back the table and saw it working nicely.  I also took the first 20 pages of that file and put it into an abbreviated movies database file, `movies_small.db` (the original goal!). My plan there is to implement a `Sorter` node that basically divides and conquers, but ONLY in-memory (so, constrained to 64 4k pages at a time, in the best case!). After that I can extend it if I want to use an out-of-core strategy if needed. Then, finally (hopefully?) I can let this go and move on to hashing!
+
+
+--- sorting
+* Should the sorting node accept a relation? A scanner/other node?
+
+Scan -> predicate -> Sort -> 
+
+scan -> predicate -> sort
+                          -> nested loop join
+             scan -> sort 
+
+# pass 0
+while more_data
+  while not_out_of_memory
+    fill_a_buffer
+    sort_the_buffer
+  end
+
+  write_buffer_to_disk_as_temp_file
+end
+
+# pass 1..n - to be defined
+pass_1_through_n
+
+iterate through buffers
+when buffer is exhausted return the page
+yield next value to caller
+
+It's a simple implementation.  It doesn't take into account an optimal temporary file size.  Though, it could -- you could cycle through pages until the temp file size reaches the ideal size. Actually no, I'm constrained by the number of free buffers! In any case, you'd need to know the size of the dataset being sorted to calculate the ideal temp file size.
+
+And really, if you have a limited set of buffers, THAT'S your constraint! You'd want to slurp up as much data as possible at once. The max input size before performance degrades would be 64^2...such that the sqrt(input) = 64.
+
+
+Use faker to build a dataset
+2000 users
+  - name
+  - account_id
+  - city
+  - state
+  
+5000 restaurants
+ - random category id
+ - name
+ - street address
+ - city
+ - state
+ - zip
+
+10000 reviews
+  - random restaurant id
+  - random user id
+  - review
+  - stars
+
+20 categories
+  - restaurant category
+
+**Goal**: Create a executor pipeline for `SELECT * from users where state = "MI"`
+
+File Scan
+Sort
+Hash
+HashAgg
+Agg
+
+SELECT * from users (File scan)
+
+SELECT count(*) from users (File scan -> Agg)
+
+SELECT count(state) from users (File scan -> sort -> Agg)
+
+SELECT distinct state from users (File scan -> sort -> distinct)
+
+SELECT * from users where state = "MI" (File scan -> hash -> predicate)
+
+SELECT avg(karma) from users group by state order by state (file scan -> HashAgg -> sort) OR (file scan -> sort -> agg)
+
+Good progress, and lots of time tonight. I finsihed the sorting/hashing lecture and also watched the single-table query lecture.
+
+The dataset I've been working with has been somewhat limiting to work with, in terms of what available to sort, group, etc. - as well as the sheer size.  I used the [Faker gem](https://github.com/faker-ruby/faker) to create a bogus `users` table with some fun data to play with.
+
+Then I wrote an `Aggregator` enumerator class that reads from a source and...counts. So, a very *specific* aggregator! I followed the pattern that I've used so far - a simple class with and `initialize` method and nothing more. I refactored the class to a design that I like a bit better. I'm using instace variables and private methods to make the procedure a bit more expressive (and less cluttered with `StopIteration` exception handling 🙌🏻)
+
+So a bit of a divergence from the goal, but still progress! If I can get a simple sort or hash executor written next time I could pull off `SELECT state, count(state) FROM users`. I think I'll start there.

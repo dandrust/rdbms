@@ -41,7 +41,7 @@ class BufferPool
     @files[path] ||= File.new(path, 'r+')
 
     # Is this page index real?
-    return if Buffer::SIZE * offset > @files[path].size
+    return if Buffer::SIZE * offset > (@files[path].size - 1)
     
     # Determine which buffer index to use
     # Strategy One: Fill the buffers!

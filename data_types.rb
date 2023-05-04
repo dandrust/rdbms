@@ -3,7 +3,7 @@
 module DataTypes
   TYPES = [
     nil, 
-    { name: :integer,   code: 0x01, template: "S", size: 2 }, 
+    { name: :integer,   code: 0x01, template: "L", size: 4 },
     { name: :float,     code: 0x02, template: "F", size: 4 }, 
     { name: :timestamp, code: 0x03, template: "L", size: 4 }, # Until 19 January 2038!
     { name: :string,    code: 0x04, template: ->(content) { "SA#{content.bytesize}" }, size: ->(content) { content.bytesize + 2 } }
@@ -20,3 +20,4 @@ module DataTypes
     TYPES[index]
   end
 end
+

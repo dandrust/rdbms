@@ -66,7 +66,7 @@ class Relation
   # { movie_id: DataTypes::INTEGER, title: DataTypes::STRING }
   # { user_id: DataTypes::INTEGER, movie_id: DataTypes::INTEGER, rating: DataTypes::FLOAT, created_at: DataTypes::TIMESTAMP }
   def self.create(name, field_defs)
-    header = Header.new(0, field_defs)
+    header = Header.new(0, field_defs, 0)
     
     # TODO check that the thing doesn't already exist
 
@@ -128,7 +128,7 @@ class Relation
       template_string = template_string.prepend("x#{remaining_in_current_page}")
     end
 
-    file.write(buffer.pack(template_string))
+    file.write(buffer.pack(template_string))  
   end
 
   class Header
