@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 class Aggregate < Enumerator
-  IDENTITY = ->(a) { a }
+  IDENTITY = ->(x) { x }
   
   def initialize(source, &transform)
     @source = source

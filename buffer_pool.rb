@@ -5,6 +5,8 @@ require_relative 'buffer'
 
 class BufferPool
   include Singleton
+
+  class OutOfMemory < RuntimeError; end
   
   BUFFER_LIMIT = 64
 
@@ -22,6 +24,11 @@ class BufferPool
     @content = {}
     @files = {}
     @references = {}
+  end
+
+  def clear
+    @buffers.clear
+    @buffers = [nil] * BUFFER_LIMIT
   end
 
   def get_page(relation, offset = 0)
@@ -43,27 +50,7 @@ class BufferPool
     # Is this page index real?
     return if Buffer::SIZE * offset > (@files[path].size - 1)
     
-    # Determine which buffer index to use
-    # Strategy One: Fill the buffers!
-    buffer_index = @buffers.index(&:nil?)
-
-    # Strategy Two: Evict unused buffer
-    if buffer_index.nil?
-      to_evict, info = @references.find { |_, info| info[:refcount].zero? }
-      unless to_evict.nil?
-        # Remove from content tracking
-        evicted_page_no = @content[path].index(info[:index]) # how do I get the buffer's page number?
-        @content[path][evicted_page_no] = nil
-
-        # remove from references
-        @references.delete(to_evict)
-
-        buffer_index ||= info[:index] 
-      end
-    end
-    
-    # Strategy Three: Fail with OOM exception
-    raise "Out of Memory" unless buffer_index
+    buffer_index = next_available_buffer_index!
 
     # Load the page 
     @buffers[buffer_index] = Buffer.new(files[path].pread(Buffer::SIZE, Buffer::SIZE * offset))
@@ -73,7 +60,8 @@ class BufferPool
     @content[path][offset] = buffer_index
 
     # Increment refcount
-    @references[@buffers[buffer_index]] ||= { index: buffer_index, refcount: 0 }
+    @references[@buffers[buffer_index]] ||= { index: buffer_index, refcount: 0, path: nil }
+    @references[@buffers[buffer_index]][:path] = path
     @references[@buffers[buffer_index]][:refcount] += 1
 
     @buffers[buffer_index]
@@ -82,6 +70,48 @@ class BufferPool
   def return_page(buffer)
     return unless references[buffer]
     @references[buffer][:refcount] -= 1 unless @references[buffer][:refcount].zero?
+  end
+  alias return_buffer return_page
+
+  def get_empty_buffer
+    buffer_index = next_available_buffer_index!
+
+    # Create the buffer
+    @buffers[buffer_index] = Buffer.new
+
+    # Increment refcount
+    @references[@buffers[buffer_index]] ||= { index: buffer_index, refcount: 0 }
+    @references[@buffers[buffer_index]][:refcount] += 1
+
+    @buffers[buffer_index]
+  end
+
+  def next_available_buffer_index!
+    # Strategy One: Fill the buffers!
+    buffer_index = @buffers.index(&:nil?)
+
+    return buffer_index unless buffer_index.nil?
+
+    # Strategy Two: Evict unused buffer
+    buffer_to_evict, info = @references.find { |_, info| info[:refcount].zero? }
+    buffer_index = evict_buffer(buffer_to_evict, info) unless buffer_to_evict.nil?
+
+    return buffer_index unless buffer_index.nil?
+    
+    raise OutOfMemory
+  end
+
+  def evict_buffer(buffer, reference_info)
+    # remove from content tracking
+    if path = reference_info[:path]
+      page_no = @content[path].index(reference_info[:index])
+      @content[path][page_no] = nil
+    end
+
+    # remove from references
+    @references.delete(buffer)
+
+    reference_info[:index]
   end
 end
 

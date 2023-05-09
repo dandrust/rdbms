@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'buffer_pool'
+require_relative 'tuple'
 
 class Scanner < Enumerator
 
@@ -16,7 +17,7 @@ class Scanner < Enumerator
         buffer.pos = pos
         
         # read tuple header
-        tuple_header = buffer.read(3)
+        tuple_header = buffer.read(Tuple::HEADER_SIZE)
 
         
         # TODO: Not a great design, it would be better if each page
@@ -40,22 +41,12 @@ class Scanner < Enumerator
           pos += 1
           next 
         end
-        
-        pos += 3
+      
+        # Go back 3 (tuple header size) so that we can read the ENTIRE tuple at once
+        buffer.seek(Tuple::HEADER_SIZE * -1, IO::SEEK_CUR)
 
-        tuple = []
-        fields.each do |_, metadata|
-          if metadata[:name] == :string
-            content_length, _ = buffer.read(2).unpack("S")
-            value_length = content_length - 2
-            value, _ = buffer.read(value_length).unpack("A#{value_length}")
-            pos += content_length
-          else
-            value, _ = buffer.read(metadata[:size]).unpack(metadata[:template])
-            pos += metadata[:size]
-          end
-          tuple << value
-        end
+        tuple = Tuple.new(buffer.read(size), fields)
+        pos += size
 
         yielder << tuple
       end
