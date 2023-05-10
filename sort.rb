@@ -113,8 +113,7 @@ class Sort < Enumerator
       @sorted_buffers.each { |b| BufferPool.return_page(b) unless b == @buffer }
       @sorted_buffers.clear
 
-      @buffer.truncate(0)
-      @buffer.rewind
+      @buffer.clear
     end
   
     @byte_count = 0
