@@ -2,6 +2,8 @@
 
 require_relative 'buffer_pool'
 require_relative 'scan'
+require 'securerandom'
+
 
 class Sort < Enumerator
 
@@ -10,6 +12,7 @@ class Sort < Enumerator
     @sorted_buffers = []
     @sorted_files = []
     @transform = transform
+    @schema = schema
 
     @sorter = if direction == :asc
       ->(a, b) { a <=> b } 
@@ -17,9 +20,6 @@ class Sort < Enumerator
       ->(a, b) { b <=> a }
     end
 
-    @file_no = 0
-
-    
     @byte_count = 0
     @to_sort = []
 
@@ -94,7 +94,6 @@ class Sort < Enumerator
   end
   
   def switch_out_buffer
-    # puts "byte_count is #{@byte_count}"
     sort_and_flush
   
     # reset state
@@ -104,12 +103,61 @@ class Sort < Enumerator
       file_handle = write_temporary_file
       @sorted_files << file_handle
       
-      # keep the buffer you have and clear it, it's contents are safe on disk
-      @sorted_buffers.except(@buffer).each { |b| BufferPool.return_page(@buffer) }
+      # @buffer still holds a buffer -- the call to replace it failed and landed us here
+      # We'll return all of our @sorted_buffers to the pool except @buffer
+      # Then we'll reset it's state by truncating and rewinding it. Confusingly, truncating doesn't rewind the buffer. Any subsequent
+      # writes will replace the truncated data with null bytes and the write will occur at the position where the truncated data
+      # ended
+      # TODO: Consider writing Buffer#clear to truncate and rewind a buffer
+      
+      @sorted_buffers.each { |b| BufferPool.return_page(b) unless b == @buffer }
+      @sorted_buffers.clear
+
+      @buffer.truncate(0)
+      @buffer.rewind
     end
   
     @byte_count = 0
     @to_sort = []
+  end
+
+  def write_temporary_file
+    path = File.join("tmp", "#{SecureRandom.uuid}.tmp.db")
+    file = File.open(path, 'a')
+
+    bytes_written = 0
+
+    sources_to_write = @sorted_buffers.map { |buf| Scan.new(buf, @schema) }
+    next_candidate_tuples = sources_to_write.map(&:next)
+
+    while !next_candidate_tuples.empty?
+      next_tuple = next_candidate_tuples.min do |a, b|
+        @sorter.call(@transform.call(a), @transform.call(b))
+      end
+
+      next_tuple_index = next_candidate_tuples.index(next_tuple)
+      
+      begin
+        replacement_tuple = sources_to_write[next_tuple_index].next
+        next_candidate_tuples[next_tuple_index] = replacement_tuple
+      rescue StopIteration
+        sources_to_write.delete_at(next_tuple_index)
+        next_candidate_tuples.delete_at(next_tuple_index)
+      end
+
+      position_in_current_page = bytes_written % 4096
+      remaining_in_current_page = 4096 - position_in_current_page
+
+      if remaining_in_current_page < next_tuple.bytesize
+        padding = [].pack("x#{remaining_in_current_page}")
+        file.write(padding)
+      end
+      
+      file.write(next_tuple.to_s)
+
+      bytes_written += next_tuple.bytesize
+    end
+    file
   end
 end
 

@@ -68,6 +68,8 @@ class BufferPool
   end
 
   def return_page(buffer)
+    buffer.truncate(0)
+    buffer.rewind
     return unless references[buffer]
     @references[buffer][:refcount] -= 1 unless @references[buffer][:refcount].zero?
   end
