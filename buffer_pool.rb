@@ -8,7 +8,8 @@ class BufferPool
 
   class OutOfMemory < RuntimeError; end
   
-  BUFFER_LIMIT = 64
+  DEFAULT_BUFFER_LIMIT = 64
+  @@buffer_limit = DEFAULT_BUFFER_LIMIT
 
   # TODO: make these private once tested and debugged
   attr_reader :buffers, :content, :files, :references
@@ -17,20 +18,39 @@ class BufferPool
     instance.send(m, *args, &block)
   end
 
+  def self.configure(buffer_limit)
+    buffer_limit = DEFAULT_BUFFER_LIMIT if buffer_limit > DEFAULT_BUFFER_LIMIT
+    buffer_limit = 1 if buffer_limit < 1
+
+    @@buffer_limit = buffer_limit
+    clear
+  end
+
+  def self.reset
+    configure(DEFAULT_BUFFER_LIMIT)
+  end
+
   private
 
   def initialize
-    @buffers = [nil] * BUFFER_LIMIT
+    clear
+  end
+
+  def buffer_limit
+    @@buffer_limit
+  end
+
+  def clear
+    @files.values.each(&:close) if @files
+
+    @buffers = [nil] * buffer_limit
     @content = {}
     @files = {}
     @references = {}
   end
 
-  def clear
-    @buffers.clear
-    @buffers = [nil] * BUFFER_LIMIT
-  end
-
+  # The first argument may be a relation or a file object -- as long
+  # as it responds to #path
   def get_page(relation, offset = 0)
     path = relation.path
 
@@ -115,15 +135,3 @@ class BufferPool
   end
 end
 
-# Ideas!
-# def get_page(args, &block)
-#   # read the file, do the accounting
-#   yield buffer if block_given?
-#   # update reference count
-# end
-
-# def get_pages(relation)
-#   # Return an enumerable that cycles through buffers as you use them up
-#   # LazyEnumerator might be helpful here?
-#   return BufferIterator.new
-# end
