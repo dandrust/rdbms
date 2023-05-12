@@ -25,36 +25,78 @@ RSpec.describe Sort do
       sorted_set.to_a.shuffle.map { |n| Tuple.new([1, 7, n].pack("CSL"), schema) }
     end
 
-    before { BufferPool.clear }
-    before { expect(source.sum(&:bytesize)).to be < 4096 }
+    before do 
+      BufferPool.reset
+      expect(source.sum(&:bytesize)).to be < 4096
+    end
 
     it "returns a sorted set" do
       expect(subject.to_a.map { |t| t[0] }).to eq(sorted_set)
     end
   end
 
-  context "given a source that fits within 64 x 4kb buffers" do
-    let(:sorted_set) { (0..1000).to_a }
+  context "given a source that fits within the buffer pool's available memory" do
+    let(:sorted_set) { (0..600).to_a }
     let(:source) do
       sorted_set.to_a.shuffle.map { |n| Tuple.new([1, 7, n].pack("CSL"), schema) }
     end
     
-    before { BufferPool.clear }
-    before { expect(source.sum(&:bytesize)).to be < (64 * 4096) }
+    before do 
+      BufferPool.reset
+      BufferPool.configure(2)
+      expect(source.sum(&:bytesize)).to be < (2 * 4096)
+      expect(source.sum(&:bytesize)).to be > 4096
+    end
 
     it "returns a sorted set" do
       expect(subject.to_a.map { |t| t[0] }).to eq(sorted_set)
     end
   end
 
-  context "given a source that exhausts 64 x 4kb buffers" do
-    let(:sorted_set) { (0..100000).to_a }
+  context "given a source that exhausts the buffer pool's available memory" do
+    let(:sorted_set) { (0..1500).to_a }
     let(:source) do
       sorted_set.to_a.shuffle.map { |n| Tuple.new([1, 7, n].pack("CSL"), schema) }
     end
 
-    before { BufferPool.clear }
-    before { expect(source.sum(&:bytesize)).to be > (64 * 4096) }
+    before do 
+      BufferPool.reset
+      BufferPool.configure(2)
+      expect(source.sum(&:bytesize)).to be > (2 * 4096)
+    end
+
+    it "returns a sorted set" do
+      expect(subject.to_a.map { |t| t[0] }).to eq(sorted_set)
+    end
+  end
+
+  context "given a source that spills more files to disk than buffers available" do
+    let(:sorted_set) { (0..2400).to_a }
+    let(:source) do
+      sorted_set.to_a.shuffle.map { |n| Tuple.new([1, 7, n].pack("CSL"), schema) }
+    end
+
+    before do 
+      BufferPool.reset
+      BufferPool.configure(2)
+      expect(source.sum(&:bytesize)).to be > (2 * 4096) * 2
+    end
+
+    it "returns a sorted set" do
+      expect(subject.to_a.map { |t| t[0] }).to eq(sorted_set)
+    end
+  end
+
+  context "extremely large source at full memory capacity" do
+    let(:sorted_set) { (0..600_000).to_a }
+    let(:source) do
+      sorted_set.to_a.shuffle.map { |n| Tuple.new([1, 7, n].pack("CSL"), schema) }
+    end
+
+    before do 
+      BufferPool.reset
+      BufferPool.configure(10)
+    end
 
     it "returns a sorted set" do
       expect(subject.to_a.map { |t| t[0] }).to eq(sorted_set)

@@ -2,8 +2,8 @@
 
 require_relative 'buffer_pool'
 require_relative 'scan'
+require_relative 'scanner'
 require 'securerandom'
-
 
 class Sort < Enumerator
 
@@ -38,19 +38,29 @@ class Sort < Enumerator
       rescue StopIteration
         # Clean up wherever we are in the process
         sort_and_flush if @to_sort.any?
+        commit_to_file if spilled_to_disk?
         break
       end 
     end
     
-    
-    # Then we'll have to figure out
-    # what we have (buffers, files, etc) 
-    # and how much memory is available.
-    # From there, we'll choose a strategy 
-    # until we have a source count <= buffer
-    # count. Then we can start yielding tuples
+    while @sorted_files.count > BufferPool.buffer_limit
+      files_to_merge = @sorted_files.shift(BufferPool.buffer_limit) # get the number of files that we can stream through available memory
+      
+      new_file = write_temporary_file(
+        files_to_merge.map { |f| Scanner.new(f, schema, header: false) }
+      )
 
-    @final_sources = @sorted_buffers.map { |buf| Scan.new(buf, schema) }
+      @sorted_files << new_file
+      files_to_merge.each { |f| f.close; File.delete(f.path) }
+    end
+
+    @final_sources = 
+      if spilled_to_disk?
+        @sorted_files.map { |f| Scanner.new(f, schema, header: false) }
+      else
+        @sorted_buffers.map { |buf| Scan.new(buf, schema) }
+      end
+    
     next_candidate_tuples = @final_sources.map(&:next)
 
     super() do |yielder|
@@ -67,9 +77,16 @@ class Sort < Enumerator
           replacement_tuple = @final_sources[next_tuple_index].next
           next_candidate_tuples[next_tuple_index] = replacement_tuple
         rescue StopIteration
+          if spilled_to_disk?
+            file_to_delete = @sorted_files[next_tuple_index]
+            
+            file_to_delete.close
+            File.delete(file_to_delete.path)
+            @sorted_files.delete_at(next_tuple_index)
+          end
+
           @final_sources.delete_at(next_tuple_index)
           next_candidate_tuples.delete_at(next_tuple_index)
-
         end
         yielder << next_tuple
       end
@@ -100,15 +117,12 @@ class Sort < Enumerator
     begin
       @buffer = BufferPool.get_empty_buffer
     rescue BufferPool::OutOfMemory
-      file_handle = write_temporary_file
+      file_handle = write_temporary_file(@sorted_buffers.map { |buf| Scan.new(buf, @schema) })
       @sorted_files << file_handle
       
       # @buffer still holds a buffer -- the call to replace it failed and landed us here
       # We'll return all of our @sorted_buffers to the pool except @buffer
-      # Then we'll reset it's state by truncating and rewinding it. Confusingly, truncating doesn't rewind the buffer. Any subsequent
-      # writes will replace the truncated data with null bytes and the write will occur at the position where the truncated data
-      # ended
-      # TODO: Consider writing Buffer#clear to truncate and rewind a buffer
+      # Then we'll reset it's state by clearing it
       
       @sorted_buffers.each { |b| BufferPool.return_page(b) unless b == @buffer }
       @sorted_buffers.clear
@@ -120,14 +134,13 @@ class Sort < Enumerator
     @to_sort = []
   end
 
-  def write_temporary_file
+  def write_temporary_file(sources)
     path = File.join("tmp", "#{SecureRandom.uuid}.tmp.db")
     file = File.open(path, 'a')
 
     bytes_written = 0
 
-    sources_to_write = @sorted_buffers.map { |buf| Scan.new(buf, @schema) }
-    next_candidate_tuples = sources_to_write.map(&:next)
+    next_candidate_tuples = sources.map(&:next)
 
     while !next_candidate_tuples.empty?
       next_tuple = next_candidate_tuples.min do |a, b|
@@ -137,10 +150,10 @@ class Sort < Enumerator
       next_tuple_index = next_candidate_tuples.index(next_tuple)
       
       begin
-        replacement_tuple = sources_to_write[next_tuple_index].next
+        replacement_tuple = sources[next_tuple_index].next
         next_candidate_tuples[next_tuple_index] = replacement_tuple
       rescue StopIteration
-        sources_to_write.delete_at(next_tuple_index)
+        sources.delete_at(next_tuple_index)
         next_candidate_tuples.delete_at(next_tuple_index)
       end
 
@@ -150,105 +163,30 @@ class Sort < Enumerator
       if remaining_in_current_page < next_tuple.bytesize
         padding = [].pack("x#{remaining_in_current_page}")
         file.write(padding)
+
+        bytes_written += remaining_in_current_page
       end
       
       file.write(next_tuple.to_s)
 
       bytes_written += next_tuple.bytesize
     end
+    file.close
     file
   end
+
+  def spilled_to_disk?
+    @sorted_files.any?
+  end
+
+  def commit_to_file # called at the end of the divide phase
+    file_handle = write_temporary_file(@sorted_buffers.map { |buf| Scan.new(buf, @schema) })
+    @sorted_files << file_handle
+
+    # Clean up state, return memory
+    @buffer = nil
+    @sorted_buffers.each { |b| BufferPool.return_page(b) }
+    @byte_count = 0
+    @to_sort = []
+  end
 end
-
-
-
-
-
-
-
-# class Relation
-#   @tuple_klass
-
-#   def initialize
-#     @tuple_klass = Struct.new(*fields) do
-#       # Can structs have instance vars that aren't memebers?
-
-#       attr_reader :serialized_bytestring
-
-#       def serialize
-#         @serialized_bytestring ||= begin
-#           # serialize the thing
-#         end
-#       end
-#       def deserialize; end
-#     end
-#   end
-# end
-
-# module Serialization
-#   module_function
-
-#   def serialize_tuple(tuple, schema)
-#     buffer = []
-#     template_string = "CS" # first element is a 1 byte header
-#     tuple_size = 3         # header occupies 1 byte, size occupies 2 bytes
-
-#     # pack the buffer with the tuple data
-#     # TODO: Make schema an array of field objects
-#     schema.each do |label, metadata|
-#       value = tuple[label]
-
-#       if metadata[:name] == :string
-#         template_string += metadata[:template].call(value)
-#         content_length = metadata[:size].call(value)
-#         buffer += [content_length, value]
-#         tuple_size += content_length
-#       else
-#         template_string += metadata[:template]
-#         buffer << value
-#         tuple_size += metadata[:size]
-#       end
-#     end
-
-#     # add tuple header
-#     header = [1, tuple_size]
-#     buffer.prepend(*header)
-
-#     buffer.pack(template_string)
-#   end
-# end
-
-
-#THIS WORKS!  From #initialize
-# loop do
-#   begin
-#     # Get as many tuples as fit 4kb
-#     while Buffer::SIZE - byte_count > tuple.bytesize
-#       to_sort << tuple
-#       byte_count += tuple.bytesize
-#       begin
-#         tuple = source.next
-#       rescue
-#         raise "no more tuples in source!"
-#       end
-#     end
-
-#     # sort the tuples and write to a buffer
-#     to_sort
-#       .sort(&sorter)
-#       .each { |t| buffer.write(t.to_s) }
-    
-#     # Keep a reference to the sorted buffer for later
-#     @sorted_buffers << buffer
-
-#     # reset state
-#     buffer = BufferPool.get_empty_buffer
-#     byte_count = 0
-#     to_sort = []
-#   rescue BufferPool::OutOfMemory
-#     file = File.new("sort_#{file_no}.tmp.db", a)
-#     # Demux sort, stream to file
-#     # Return pages to buffer pool
-#     # start the loop again
-#   end
-# end
