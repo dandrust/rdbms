@@ -4,14 +4,11 @@ require_relative 'buffer_pool'
 require_relative 'tuple'
 
 class Scanner < Enumerator
-
-  def initialize(relation)
-    fields = relation.fields
-    
+  def initialize(relation, schema, header: true)
     super() do |yielder|
       page_no = 0
       buffer = BufferPool.get_page(relation, 0)
-      pos = relation.header.length
+      pos = header ? relation.header.length : 0
 
       loop do
         buffer.pos = pos
@@ -45,7 +42,7 @@ class Scanner < Enumerator
         # Go back 3 (tuple header size) so that we can read the ENTIRE tuple at once
         buffer.seek(Tuple::HEADER_SIZE * -1, IO::SEEK_CUR)
 
-        tuple = Tuple.new(buffer.read(size), fields)
+        tuple = Tuple.new(buffer.read(size), schema)
         pos += size
 
         yielder << tuple
