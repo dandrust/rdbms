@@ -375,3 +375,4 @@ The dataset I've been working with has been somewhat limiting to work with, in t
 Then I wrote an `Aggregator` enumerator class that reads from a source and...counts. So, a very *specific* aggregator! I followed the pattern that I've used so far - a simple class with and `initialize` method and nothing more. I refactored the class to a design that I like a bit better. I'm using instace variables and private methods to make the procedure a bit more expressive (and less cluttered with `StopIteration` exception handling 🙌🏻)
 
 So a bit of a divergence from the goal, but still progress! If I can get a simple sort or hash executor written next time I could pull off `SELECT state, count(state) FROM users`. I think I'll start there.
+lalala
